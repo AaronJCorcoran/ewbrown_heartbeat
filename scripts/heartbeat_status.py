@@ -135,22 +135,21 @@ def get_disk_usage(path_str):
         return {"path": str(path), "error": str(e)}
 
 
-def get_camera_ntp_status(ip, axis_user, axis_password, pi_lan_ip, offset_warn_secs=5):
+def get_camera_ntp_status(ip, axis_user, axis_password, pi_lan_ip):
     """
-    Check camera NTP config and time offset vs Pi.
-    Returns dict with: ntp_server, sync_source, offset_secs, synced, error.
+    Check camera NTP configuration via param.cgi.
+    Returns dict with: ntp_server, sync_source, synced, error.
     """
-    result = {"ntp_server": None, "sync_source": None, "offset_secs": None, "synced": False, "error": None}
+    result = {"ntp_server": None, "sync_source": None, "synced": False, "error": None}
 
-    # 1. Get NTP config via param.cgi
-    params_cmd = [
+    cmd = [
         "curl", "--silent", "--fail", "--anyauth",
         "--max-time", "10",
         "--user", axis_user + ":" + axis_password,
         "http://" + ip + "/axis-cgi/param.cgi?action=list&group=Time",
     ]
     try:
-        r = subprocess.run(params_cmd, capture_output=True, text=True, timeout=15)
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
         if r.returncode != 0:
             result["error"] = "param.cgi failed"
             return result
@@ -163,34 +162,7 @@ def get_camera_ntp_status(ip, axis_user, axis_password, pi_lan_ip, offset_warn_s
         result["error"] = "param.cgi error: " + str(e)
         return result
 
-    # 2. Get camera current UTC time via time.cgi
-    time_cmd = [
-        "curl", "--silent", "--fail", "--anyauth",
-        "--max-time", "10",
-        "--user", axis_user + ":" + axis_password,
-        "--request", "POST",
-        "--header", "Content-Type: application/json",
-        "--data", '{"apiVersion":"1.0","method":"getDateTimeInfo"}',
-        "http://" + ip + "/axis-cgi/time.cgi",
-    ]
-    try:
-        r = subprocess.run(time_cmd, capture_output=True, text=True, timeout=15)
-        if r.returncode == 0:
-            m = re.search(r'"dateTime"\s*:\s*"([^"]+)"', r.stdout)
-            if m:
-                cam_dt = datetime.fromisoformat(m.group(1).replace("Z", "+00:00"))
-                pi_dt = datetime.now(timezone.utc)
-                offset = round(abs((pi_dt - cam_dt).total_seconds()), 1)
-                result["offset_secs"] = offset
-    except Exception as e:
-        logging.warning("Camera time fetch failed for %s: %s", ip, e)
-
-    # Evaluate sync status
-    server_ok = result["ntp_server"] == pi_lan_ip
-    source_ok = result["sync_source"] == "NTP"
-    offset_ok = result["offset_secs"] is not None and result["offset_secs"] < offset_warn_secs
-    result["synced"] = server_ok and source_ok and offset_ok
-
+    result["synced"] = result["ntp_server"] == pi_lan_ip and result["sync_source"] == "NTP"
     return result
 
 
@@ -587,11 +559,9 @@ def render_text_report(status):
         ntp = cam.get("ntp")
         if ntp and cam_ok:
             ntp_ok = ntp.get("synced", False)
-            offset = ntp.get("offset_secs")
             server = ntp.get("ntp_server", "?")
-            offset_str = (", offset=" + str(offset) + "s") if offset is not None else ""
-            ntp_ok_msg = "server=" + server + offset_str
-            ntp_fail_msg = "server=" + server + offset_str + " (source=" + str(ntp.get("sync_source")) + ")"
+            ntp_ok_msg = "server=" + server
+            ntp_fail_msg = "server=" + server + ", source=" + str(ntp.get("sync_source"))
             summary.append(("  " + cam_key + " NTP").ljust(14) + check(ntp_ok, ntp_ok_msg, ntp_fail_msg))
     pull_ok = pull.get("pull_exit_code") in (0, None)
     pull_rc = str(pull.get("pull_exit_code", "n/a"))
@@ -826,11 +796,7 @@ def main():
             alerts.append("Camera " + cam_key + " (" + cam["ip"] + ") has NO recording from yesterday")
         ntp = cam.get("ntp", {})
         if cam.get("reachable") and not ntp.get("synced"):
-            ntp_server = ntp.get("ntp_server", "unknown")
-            offset = ntp.get("offset_secs")
-            detail = "server=" + ntp_server
-            if offset is not None:
-                detail += ", offset=" + str(offset) + "s"
+            detail = "server=" + str(ntp.get("ntp_server", "unknown")) + ", source=" + str(ntp.get("sync_source", "unknown"))
             alerts.append("Camera " + cam_key + " NTP not synced to Pi -- " + detail)
     pull_rc = args.pull_exit_code
     if pull_rc is not None and pull_rc != 0:
