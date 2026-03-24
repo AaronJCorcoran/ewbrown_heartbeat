@@ -135,6 +135,65 @@ def get_disk_usage(path_str):
         return {"path": str(path), "error": str(e)}
 
 
+def get_camera_ntp_status(ip, axis_user, axis_password, pi_lan_ip, offset_warn_secs=5):
+    """
+    Check camera NTP config and time offset vs Pi.
+    Returns dict with: ntp_server, sync_source, offset_secs, synced, error.
+    """
+    result = {"ntp_server": None, "sync_source": None, "offset_secs": None, "synced": False, "error": None}
+
+    # 1. Get NTP config via param.cgi
+    params_cmd = [
+        "curl", "--silent", "--fail", "--anyauth",
+        "--max-time", "10",
+        "--user", axis_user + ":" + axis_password,
+        "http://" + ip + "/axis-cgi/param.cgi?action=list&group=Time",
+    ]
+    try:
+        r = subprocess.run(params_cmd, capture_output=True, text=True, timeout=15)
+        if r.returncode != 0:
+            result["error"] = "param.cgi failed"
+            return result
+        for line in r.stdout.splitlines():
+            if "Time.NTP.Server=" in line:
+                result["ntp_server"] = line.split("=", 1)[1].strip()
+            elif "Time.SyncSource=" in line:
+                result["sync_source"] = line.split("=", 1)[1].strip()
+    except Exception as e:
+        result["error"] = "param.cgi error: " + str(e)
+        return result
+
+    # 2. Get camera current UTC time via time.cgi
+    time_cmd = [
+        "curl", "--silent", "--fail", "--anyauth",
+        "--max-time", "10",
+        "--user", axis_user + ":" + axis_password,
+        "--request", "POST",
+        "--header", "Content-Type: application/json",
+        "--data", '{"apiVersion":"1.0","method":"getDateTimeInfo"}',
+        "http://" + ip + "/axis-cgi/time.cgi",
+    ]
+    try:
+        r = subprocess.run(time_cmd, capture_output=True, text=True, timeout=15)
+        if r.returncode == 0:
+            m = re.search(r'"dateTime"\s*:\s*"([^"]+)"', r.stdout)
+            if m:
+                cam_dt = datetime.fromisoformat(m.group(1).replace("Z", "+00:00"))
+                pi_dt = datetime.now(timezone.utc)
+                offset = round(abs((pi_dt - cam_dt).total_seconds()), 1)
+                result["offset_secs"] = offset
+    except Exception as e:
+        logging.warning("Camera time fetch failed for %s: %s", ip, e)
+
+    # Evaluate sync status
+    server_ok = result["ntp_server"] == pi_lan_ip
+    source_ok = result["sync_source"] == "NTP"
+    offset_ok = result["offset_secs"] is not None and result["offset_secs"] < offset_warn_secs
+    result["synced"] = server_ok and source_ok and offset_ok
+
+    return result
+
+
 def get_pi_temperature():
     """Read Pi CPU temperature from sysfs. Returns float degrees C or None."""
     try:
@@ -525,6 +584,15 @@ def render_text_report(status):
             summary.append(("  " + cam_key + " SD").ljust(14) + check(sd_ok, sd_msg, sd_msg))
         elif cam_ok:
             summary.append(("  " + cam_key + " SD").ljust(14) + "FAIL  unavailable")
+        ntp = cam.get("ntp")
+        if ntp and cam_ok:
+            ntp_ok = ntp.get("synced", False)
+            offset = ntp.get("offset_secs")
+            server = ntp.get("ntp_server", "?")
+            offset_str = (", offset=" + str(offset) + "s") if offset is not None else ""
+            ntp_ok_msg = "server=" + server + offset_str
+            ntp_fail_msg = "server=" + server + offset_str + " (source=" + str(ntp.get("sync_source")) + ")"
+            summary.append(("  " + cam_key + " NTP").ljust(14) + check(ntp_ok, ntp_ok_msg, ntp_fail_msg))
     pull_ok = pull.get("pull_exit_code") in (0, None)
     pull_rc = str(pull.get("pull_exit_code", "n/a"))
     summary.append("  Pull        " + check(pull_ok, "exit " + pull_rc, "exit " + pull_rc))
@@ -659,6 +727,8 @@ def main():
     cam2 = axis_record_summary(cam2_name, cam2_ip, axis_user, axis_password, site_tz)
     cam1["sd_disk"] = get_camera_disk_info(cam1_ip, axis_user, axis_password)
     cam2["sd_disk"] = get_camera_disk_info(cam2_ip, axis_user, axis_password)
+    cam1["ntp"] = get_camera_ntp_status(cam1_ip, axis_user, axis_password, pi_lan_ip)
+    cam2["ntp"] = get_camera_ntp_status(cam2_ip, axis_user, axis_password, pi_lan_ip)
 
     for cam in (cam1, cam2):
         sd = cam.get("sd_disk")
@@ -754,6 +824,14 @@ def main():
             alerts.append("Camera " + cam_key + " (" + cam["ip"] + ") is UNREACHABLE")
         elif cam.get("yesterday_duration_secs", 0) == 0:
             alerts.append("Camera " + cam_key + " (" + cam["ip"] + ") has NO recording from yesterday")
+        ntp = cam.get("ntp", {})
+        if cam.get("reachable") and not ntp.get("synced"):
+            ntp_server = ntp.get("ntp_server", "unknown")
+            offset = ntp.get("offset_secs")
+            detail = "server=" + ntp_server
+            if offset is not None:
+                detail += ", offset=" + str(offset) + "s"
+            alerts.append("Camera " + cam_key + " NTP not synced to Pi -- " + detail)
     pull_rc = args.pull_exit_code
     if pull_rc is not None and pull_rc != 0:
         alerts.append("Pull script exited with code " + str(pull_rc))
