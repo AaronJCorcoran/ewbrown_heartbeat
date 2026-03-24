@@ -10,7 +10,7 @@ import smtplib
 import socket
 import ssl
 import subprocess
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from email.message import EmailMessage
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -145,7 +145,18 @@ def get_pi_temperature():
         return None
 
 
-def axis_record_summary(name, ip, axis_user, axis_password):
+def format_duration(secs):
+    secs = int(secs)
+    if secs <= 0:
+        return "0m"
+    h = secs // 3600
+    m = (secs % 3600) // 60
+    if h:
+        return str(h) + "h " + str(m) + "m"
+    return str(m) + "m"
+
+
+def axis_record_summary(name, ip, axis_user, axis_password, site_tz="UTC"):
     url = f"http://{ip}/axis-cgi/record/list.cgi?recordingid=all"
     cmd = [
         "curl",
@@ -170,6 +181,8 @@ def axis_record_summary(name, ip, axis_user, axis_password):
             "error": str(e),
             "active_count": None,
             "completed_count": None,
+            "yesterday_duration_secs": None,
+            "yesterday_duration_human": None,
         }
 
     if result.returncode != 0:
@@ -180,13 +193,43 @@ def axis_record_summary(name, ip, axis_user, axis_password):
             "error": (result.stderr or result.stdout).strip(),
             "active_count": None,
             "completed_count": None,
+            "yesterday_duration_secs": None,
+            "yesterday_duration_human": None,
         }
 
     body = result.stdout
-    statuses = re.findall(r'recordingstatus="([^"]+)"', body, flags=re.IGNORECASE)
+    tz = ZoneInfo(site_tz)
+    yesterday = (datetime.now(tz) - timedelta(days=1)).date()
 
-    active_count = sum(1 for s in statuses if s.lower() == "recording")
-    completed_count = sum(1 for s in statuses if s.lower() != "recording")
+    active_count = 0
+    completed_count = 0
+    yesterday_duration_secs = 0
+
+    for tag in re.findall(r"<recording\b[^>]*>", body, flags=re.IGNORECASE):
+        status_m = re.search(r'recordingstatus="([^"]*)"', tag)
+        status_val = status_m.group(1).lower() if status_m else ""
+
+        if status_val == "recording":
+            active_count += 1
+        else:
+            completed_count += 1
+
+        if status_val == "completed":
+            start_m = re.search(r'\bstarttime="([^"]*)"', tag)
+            stop_m = re.search(r'\bstoptime="([^"]*)"', tag)
+            if start_m and stop_m:
+                start_str = start_m.group(1)
+                stop_str = stop_m.group(1)
+                if start_str and stop_str:
+                    try:
+                        start_dt = datetime.fromisoformat(start_str.replace("Z", "+00:00"))
+                        stop_dt = datetime.fromisoformat(stop_str.replace("Z", "+00:00"))
+                        if start_dt.astimezone(tz).date() == yesterday:
+                            dur = (stop_dt - start_dt).total_seconds()
+                            if dur > 0:
+                                yesterday_duration_secs += dur
+                    except Exception:
+                        pass
 
     return {
         "name": name,
@@ -194,8 +237,10 @@ def axis_record_summary(name, ip, axis_user, axis_password):
         "reachable": True,
         "active_count": active_count,
         "completed_count": completed_count,
-        "record_count_total": len(statuses),
+        "record_count_total": active_count + completed_count,
         "any_active": active_count > 0,
+        "yesterday_duration_secs": yesterday_duration_secs,
+        "yesterday_duration_human": format_duration(yesterday_duration_secs),
         "error": None,
     }
 
@@ -373,7 +418,9 @@ def render_text_report(status):
     for cam_key in ("cam1", "cam2"):
         cam = cams[cam_key]
         cam_ok = cam.get("reachable", False)
-        cam_ok_msg = "completed=" + str(cam.get("completed_count", "?")) + ", active=" + str(cam.get("active_count", "?"))
+        dur = cam.get("yesterday_duration_human")
+        dur_str = (", yesterday=" + dur) if dur else ""
+        cam_ok_msg = "completed=" + str(cam.get("completed_count", "?")) + ", active=" + str(cam.get("active_count", "?")) + dur_str
         cam_fail_msg = str(cam.get("error", "unreachable"))
         summary.append(("  " + cam_key).ljust(14) + check(cam_ok, cam_ok_msg, cam_fail_msg))
     pull_ok = pull.get("pull_exit_code") in (0, None)
@@ -409,9 +456,11 @@ def render_text_report(status):
     for cam_key in ("cam1", "cam2"):
         cam = cams[cam_key]
         if cam["reachable"]:
+            dur = cam.get("yesterday_duration_human")
+            dur_str = (", yesterday recording duration=" + dur) if dur else ", yesterday recording duration=none"
             lines.append(
                 cam_key + " (" + cam["ip"] + "): reachable, completed=" + str(cam["completed_count"])
-                + ", active=" + str(cam["active_count"])
+                + ", active=" + str(cam["active_count"]) + dur_str
             )
         else:
             lines.append(cam_key + " (" + cam["ip"] + "): UNREACHABLE: " + str(cam.get("error", "unknown error")))
@@ -487,8 +536,8 @@ def main():
     alert_temp_threshold = float(getenv("ALERT_TEMP_THRESHOLD", "70"))
     alert_email_to = getenv("ALERT_EMAIL_TO") or getenv("SMTP_TO")
 
-    cam1 = axis_record_summary(cam1_name, cam1_ip, axis_user, axis_password)
-    cam2 = axis_record_summary(cam2_name, cam2_ip, axis_user, axis_password)
+    cam1 = axis_record_summary(cam1_name, cam1_ip, axis_user, axis_password, site_tz)
+    cam2 = axis_record_summary(cam2_name, cam2_ip, axis_user, axis_password, site_tz)
 
     systemd_pull = get_systemd_pull_info()
     pull_status = read_json_file(pull_status_json_path)
