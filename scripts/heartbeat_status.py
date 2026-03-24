@@ -516,6 +516,15 @@ def render_text_report(status):
         cam_ok_msg = "completed=" + str(cam.get("completed_count", "?")) + ", active=" + str(cam.get("active_count", "?")) + dur_str
         cam_fail_msg = str(cam.get("error", "unreachable"))
         summary.append(("  " + cam_key).ljust(14) + check(cam_ok, cam_ok_msg, cam_fail_msg))
+        sd = cam.get("sd_disk")
+        if sd:
+            sd_days = sd.get("days_remaining")
+            sd_days_str = (", ~" + str(sd_days) + " days left") if sd_days is not None else ""
+            sd_ok = sd.get("used_percent", 100) < 80
+            sd_msg = str(sd.get("used_percent", "?")) + "% used, " + str(sd.get("free_human", "?")) + " free" + sd_days_str
+            summary.append(("  " + cam_key + " SD").ljust(14) + check(sd_ok, sd_msg, sd_msg))
+        elif cam_ok:
+            summary.append(("  " + cam_key + " SD").ljust(14) + "FAIL  unavailable")
     pull_ok = pull.get("pull_exit_code") in (0, None)
     pull_rc = str(pull.get("pull_exit_code", "n/a"))
     summary.append("  Pull        " + check(pull_ok, "exit " + pull_rc, "exit " + pull_rc))
