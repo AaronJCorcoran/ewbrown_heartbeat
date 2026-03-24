@@ -1,0 +1,7 @@
+# Normalize line endings
+* text=auto
+
+# Force LF for files that run on Linux
+*.sh text eol=lf
+*.py text eol=lf
+systemd/* text eol=lf

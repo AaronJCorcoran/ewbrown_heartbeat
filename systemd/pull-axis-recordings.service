@@ -1,0 +1,15 @@
+[Unit]
+Description=Pull completed Axis recordings to SSD and generate heartbeat
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=admin
+Group=admin
+WorkingDirectory=/home/admin/fieldcam
+EnvironmentFile=/home/admin/fieldcam/config/heartbeat.env
+ExecStart=/home/admin/fieldcam/scripts/run_pull_then_heartbeat.sh
+
+[Install]
+WantedBy=multi-user.target

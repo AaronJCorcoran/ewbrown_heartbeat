@@ -1,0 +1,16 @@
+# Actual env config (contains credentials) - never commit this
+config/heartbeat.env
+
+# Runtime output files
+*.log
+*.json
+*.tmp
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# OS
+.DS_Store
+Thumbs.db

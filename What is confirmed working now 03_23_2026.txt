@@ -1,0 +1,148 @@
+What is confirmed working now:
+
+The pull-axis-recordings.service ran successfully and exited cleanly. On the verification rerun, it found recordings on both cameras and exported 0 new recordings, which indicates the duplicate-suppression/state logic is working.
+At the time of the captured log, cam1 at 192.168.50.201 had 2 recordings visible: one completed recording (20260323_180000_F558_B8A44FF6D227) and one still active recording (20260323_191138_F7A2_B8A44FF6D227). The completed one was not exported on that run because the script saw no new eligible recordings.
+At the same time, cam2 at 192.168.50.202 had 3 recordings visible: two completed recordings (20260323_014006_7657_B8A44FF6D42C and 20260323_014031_2291_B8A44FF6D42C) and one still active recording (20260323_175959_886F_B8A44FF6D42C). On the verification rerun, both completed files were recognized as already handled and no new exports occurred.
+ffprobe successfully opened at least one exported .mkv from cam1 and reported it as a Matroska file containing HEVC video at 640x480 and 30 fps, with creation time 2026-03-23T22:00:00.230597Z.
+The attempted ffprobe /mnt/video_ssd/cam2/*.mkv check was inconclusive because ffprobe was given multiple input filenames in one call and returned an argument error, so that command does not indicate bad cam2 files.
+
+What I would explicitly write down in your deployment notes:
+
+Pi hostname and role: pi1, local controller/NTP/export host.
+Pi LAN IP: 192.168.50.127.
+Camera IPs: cam1 = 192.168.50.201, cam2 = 192.168.50.202.
+External SSD mountpoint: /mnt/video_ssd.
+SSD filesystem: exFAT, chosen for easy swapping/checking on Windows machines.
+Export destinations:
+/mnt/video_ssd/cam1
+/mnt/video_ssd/cam2
+Script path:
+/home/admin/fieldcam/scripts/pull_axis_recordings.py
+State file path:
+/home/admin/fieldcam/state/exported_recordings.json
+Log path:
+/home/admin/fieldcam/logs/pull_axis_recordings.log
+Systemd units:
+pull-axis-recordings.service
+pull-axis-recordings.timer
+Scheduled run time:
+daily at 08:15 local time
+Camera recording mode:
+nightly recording to onboard microSD, with morning pull to the Pi SSD
+File format:
+exported as .mkv
+Video characteristics observed so far:
+HEVC, 640x480, 30 fps
+Current event rule name on cameras:
+whatever the final corrected event_id is in the script and on each camera, since you had one mismatch earlier and later fixed it
+
+I would also keep a short “known issues / gotchas” section:
+
+Axis API times are effectively being handled in UTC, so filenames and logs should continue to preserve UTC where possible.
+Active recordings should never be exported; only recordingstatus="completed" should be copied.
+ffprobe checks need to be run one file at a time or in a loop, not with a bare wildcard.
+
+I’m continuing setup of an EW Brown field video system. Treat the following as established context and do not re-solve already completed steps.
+
+System overview
+- Router: Teltonika RUT241
+- Controller/utility host: Raspberry Pi, hostname `pi1`
+- Pi LAN IP: `192.168.50.127`
+- Cameras: 2 x AXIS Q1972-E
+- cam1 IP: `192.168.50.201`
+- cam2 IP: `192.168.50.202`
+- Both cameras are currently configured to record nightly to onboard microSD cards
+- Pi is serving as NTP server for the local network
+- External SSD is attached to the Pi and mounted at `/mnt/video_ssd`
+- SSD filesystem is exFAT on purpose so field techs can swap/check it on Windows machines
+- The Pi and cameras are on the same LAN behind the RUT241
+- Cellular SIM is not installed yet, so current testing is on home LAN
+
+Time/scheduling context
+- Camera schedules are intended to run in local site time
+- NTP comes from the Pi
+- We discussed that NTP and timezone are separate on the cameras
+- Need to keep DST behavior sane
+- Pi timer currently shows local time correctly and is scheduled for morning pull
+
+Storage / mount details
+- SSD mountpoint: `/mnt/video_ssd`
+- exFAT UUID: `FFE1-C073`
+- `/etc/fstab` entry uses:
+  `UUID=FFE1-C073 /mnt/video_ssd exfat defaults,nofail,uid=1000,gid=1000,umask=0022 0 0`
+
+Recording pull workflow already working
+- We successfully tested manual export from an Axis camera using the Axis recording/export API
+- We then created a Pi-side script that:
+  - lists recordings from each camera
+  - skips active recordings (`recordingstatus="recording"`)
+  - exports only completed recordings
+  - avoids duplicate re-exports using a JSON state file
+- Script path:
+  `/home/admin/fieldcam/scripts/pull_axis_recordings.py`
+- State file:
+  `/home/admin/fieldcam/state/exported_recordings.json`
+- Log file:
+  `/home/admin/fieldcam/logs/pull_axis_recordings.log`
+- Export destinations:
+  `/mnt/video_ssd/cam1`
+  `/mnt/video_ssd/cam2`
+- Export format: `.mkv`
+
+Systemd scheduling already working
+- Service:
+  `pull-axis-recordings.service`
+- Timer:
+  `pull-axis-recordings.timer`
+- Timer currently runs daily at:
+  `08:15` local time
+- Manual test of the service succeeded
+- Rerun correctly exported 0 new recordings when nothing new was pending
+
+Current known-good behavior from logs
+- cam1 and cam2 are reachable
+- Completed recordings are pulled successfully
+- Active recordings are skipped
+- Duplicate suppression is working
+- At least one exported file was verified readable with `ffprobe`
+- A previous event-id mismatch on cam1 was fixed
+
+Important implementation details
+- Axis API listing endpoint used:
+  `/axis-cgi/record/list.cgi?recordingid=all`
+- Axis export endpoint used:
+  `/axis-cgi/record/export/exportrecording.cgi?...`
+- Axis API times are effectively in UTC, so filenames/state should preserve UTC where useful
+- Please assume the working script currently uses `curl --anyauth` inside Python rather than Python’s digest-auth handling
+
+Credentials
+- Do not ask me to paste real passwords into chat unless necessary
+- Use placeholders like `AXIS_PASSWORD`, `EMAIL_PASSWORD`, etc. in any code you generate
+- Prefer storing secrets in a local config/env file on the Pi
+
+What I want to work on next
+1. Design and implement a daily heartbeat/status system
+2. Keep the existing recording-pull system intact
+3. Make the heartbeat useful for remote monitoring once the SIM is installed
+
+What the daily heartbeat should probably include
+- Timestamp
+- Pi hostname and LAN IP
+- Uptime
+- SSD free space / disk usage
+- Whether cam1 and cam2 are reachable
+- Count of completed recordings found
+- Count of recordings exported in last run
+- Any errors from the last pull log
+- Last successful pull time
+- Whether any recording is currently active
+- Possibly a small still/image or a concise summary of latest files
+- Eventually, once cellular is live, maybe WAN/public IP and cellular signal/connection status
+
+What I want from you in this new chat
+- Help me design the next steps from here
+- Start with the daily heartbeat architecture and implementation
+- Prefer robust/simple solutions appropriate for a field system
+- Use systemd timers/services rather than cron unless there is a strong reason not to
+- Keep logs and scripts on the Pi internal storage, with video data on the external SSD
+- Be explicit about file paths, commands, and systemd unit files
