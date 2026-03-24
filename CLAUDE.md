@@ -48,6 +48,7 @@ All config from environment variables loaded via `EnvironmentFile` in the system
 1. Queries each camera at `http://<IP>/axis-cgi/record/list.cgi?recordingid=all` — parses XML with regex to get active/completed counts, yesterday's recording duration, and oldest recording on card
 2. Queries each camera at `http://<IP>/axis-cgi/disks/list.cgi?diskid=all` — gets SD card used/free in KB; estimates days remaining from `used_bytes / total_completed_duration_secs`
 3. Queries each camera at `http://<IP>/axis-cgi/jpg/image.cgi` — fetches JPEG snapshot for email attachment
+4. Queries each camera at `http://<IP>/axis-cgi/param.cgi?action=list&group=Time` — gets configured NTP server and sync source; POSTs to `http://<IP>/axis-cgi/time.cgi` with `getDateTimeInfo` to get camera UTC time; compares to Pi time for offset
 4. Reads Pi CPU temp from `/sys/class/thermal/thermal_zone0/temp`
 5. Calls `systemctl show` for pull service metadata
 6. Estimates SSD days remaining from write rate since oldest file on SSD
@@ -58,6 +59,7 @@ All config from environment variables loaded via `EnvironmentFile` in the system
 
 - Camera unreachable
 - Camera reachable but yesterday's recording duration is 0
+- Camera NTP not synced to Pi (wrong server, wrong sync source, or offset ≥ 5s)
 - Pull exit code non-zero
 - SSD usage ≥ `ALERT_DISK_THRESHOLD` (default 80%)
 - Pi CPU temp ≥ `ALERT_TEMP_THRESHOLD` (default 70°C)

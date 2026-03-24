@@ -75,6 +75,7 @@ Report includes (Quick Check summary + detail):
 - Per camera: SD card used/free/% with estimated days remaining
 - Per camera: oldest recording on SD card (indicates buffer depth before overwrite)
 - Per camera: live JPEG snapshot attached to email
+- Per camera: NTP server configured and time offset vs Pi (from param.cgi + time.cgi)
 - Pull service result and exit code
 - Latest 3 files on SSD per camera
 - Recent pull log errors
@@ -83,6 +84,7 @@ Alert emails:
 - Sent separately when any of the following are detected:
   - Camera unreachable
   - Camera reachable but no recording from yesterday (gap alert)
+  - Camera NTP not synced to Pi (wrong server, wrong source, or offset >= 5s)
   - Pull exit code non-zero
   - SSD usage >= ALERT_DISK_THRESHOLD (default 80%)
   - Pi CPU temp >= ALERT_TEMP_THRESHOLD (default 70 C)
