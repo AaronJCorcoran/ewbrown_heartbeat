@@ -145,6 +145,81 @@ def get_pi_temperature():
         return None
 
 
+def estimate_ssd_days_remaining(ssd_path):
+    """Estimate days until SSD is full based on observed write rate since oldest file."""
+    import time
+    ssd = Path(ssd_path)
+    all_files = []
+    try:
+        for cam_dir in ssd.iterdir():
+            if cam_dir.is_dir():
+                for f in cam_dir.iterdir():
+                    if f.is_file():
+                        all_files.append(f)
+    except Exception:
+        return None
+
+    if not all_files:
+        return None
+
+    try:
+        oldest_mtime = min(f.stat().st_mtime for f in all_files)
+        days_elapsed = (time.time() - oldest_mtime) / 86400
+        if days_elapsed < 1:
+            return None
+        total, used, free = shutil.disk_usage(ssd)
+        daily_rate = used / days_elapsed
+        if daily_rate <= 0:
+            return None
+        return {
+            "days_remaining": round(free / daily_rate),
+            "daily_rate_human": human_bytes(daily_rate) + "/day",
+        }
+    except Exception as e:
+        logging.warning("SSD days-remaining estimate failed: %s", e)
+        return None
+
+
+def get_camera_disk_info(ip, axis_user, axis_password):
+    """Query SD_DISK usage from Axis camera. Returns dict with human-readable sizes or None."""
+    url = f"http://{ip}/axis-cgi/disks/list.cgi?diskid=all"
+    cmd = [
+        "curl", "--silent", "--fail", "--anyauth",
+        "--max-time", "10",
+        "--user", axis_user + ":" + axis_password,
+        url,
+    ]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+        if result.returncode != 0:
+            return None
+        body = result.stdout
+        # Sizes are in KB; extract from SD_DISK entry
+        sd_m = re.search(r'diskid="SD_DISK"[^>]*>', body)
+        if not sd_m:
+            return None
+        sd_tag = sd_m.group(0)
+        total_m = re.search(r'totalsize="(\d+)"', sd_tag)
+        free_m = re.search(r'freesize="(\d+)"', sd_tag)
+        if not total_m or not free_m:
+            return None
+        total_kb = int(total_m.group(1))
+        free_kb = int(free_m.group(1))
+        used_kb = total_kb - free_kb
+        used_pct = round(used_kb / total_kb * 100, 1) if total_kb else 0.0
+        return {
+            "total_human": human_bytes(total_kb * 1024),
+            "used_human": human_bytes(used_kb * 1024),
+            "free_human": human_bytes(free_kb * 1024),
+            "used_percent": used_pct,
+            "used_bytes": used_kb * 1024,
+            "free_bytes": free_kb * 1024,
+        }
+    except Exception as e:
+        logging.warning("Camera disk info failed for %s: %s", ip, e)
+        return None
+
+
 def format_duration(secs):
     secs = int(secs)
     if secs <= 0:
@@ -204,32 +279,46 @@ def axis_record_summary(name, ip, axis_user, axis_password, site_tz="UTC"):
     active_count = 0
     completed_count = 0
     yesterday_duration_secs = 0
+    total_completed_duration_secs = 0
+    oldest_start_dt = None
 
     for tag in re.findall(r"<recording\b[^>]*>", body, flags=re.IGNORECASE):
         status_m = re.search(r'recordingstatus="([^"]*)"', tag)
         status_val = status_m.group(1).lower() if status_m else ""
+        start_m = re.search(r'\bstarttime="([^"]*)"', tag)
 
         if status_val == "recording":
             active_count += 1
         else:
             completed_count += 1
 
+        # Track oldest recording on the card (any status)
+        if start_m and start_m.group(1):
+            try:
+                start_dt = datetime.fromisoformat(start_m.group(1).replace("Z", "+00:00"))
+                if oldest_start_dt is None or start_dt < oldest_start_dt:
+                    oldest_start_dt = start_dt
+            except Exception:
+                pass
+
+        # Sum completed recording durations (all, and yesterday's subset)
         if status_val == "completed":
-            start_m = re.search(r'\bstarttime="([^"]*)"', tag)
             stop_m = re.search(r'\bstoptime="([^"]*)"', tag)
-            if start_m and stop_m:
-                start_str = start_m.group(1)
-                stop_str = stop_m.group(1)
-                if start_str and stop_str:
-                    try:
-                        start_dt = datetime.fromisoformat(start_str.replace("Z", "+00:00"))
-                        stop_dt = datetime.fromisoformat(stop_str.replace("Z", "+00:00"))
+            if start_m and stop_m and start_m.group(1) and stop_m.group(1):
+                try:
+                    start_dt = datetime.fromisoformat(start_m.group(1).replace("Z", "+00:00"))
+                    stop_dt = datetime.fromisoformat(stop_m.group(1).replace("Z", "+00:00"))
+                    dur = (stop_dt - start_dt).total_seconds()
+                    if dur > 0:
+                        total_completed_duration_secs += dur
                         if start_dt.astimezone(tz).date() == yesterday:
-                            dur = (stop_dt - start_dt).total_seconds()
-                            if dur > 0:
-                                yesterday_duration_secs += dur
-                    except Exception:
-                        pass
+                            yesterday_duration_secs += dur
+                except Exception:
+                    pass
+
+    oldest_local = None
+    if oldest_start_dt is not None:
+        oldest_local = oldest_start_dt.astimezone(tz).strftime("%Y-%m-%d %H:%M %Z")
 
     return {
         "name": name,
@@ -241,6 +330,8 @@ def axis_record_summary(name, ip, axis_user, axis_password, site_tz="UTC"):
         "any_active": active_count > 0,
         "yesterday_duration_secs": yesterday_duration_secs,
         "yesterday_duration_human": format_duration(yesterday_duration_secs),
+        "total_completed_duration_secs": total_completed_duration_secs,
+        "oldest_recording_local": oldest_local,
         "error": None,
     }
 
@@ -412,7 +503,9 @@ def render_text_report(status):
         temp_ok = pi_temp < 70
         summary.append("  Pi temp     " + check(temp_ok, str(pi_temp) + " C", str(pi_temp) + " C -- HIGH"))
     disk_ok = "error" not in disk and disk.get("used_percent", 100) < 80
-    disk_ok_msg = str(disk.get("used_percent", "?")) + "% used, " + str(disk.get("free_human", "?")) + " free"
+    ssd_est = status.get("ssd_days_remaining")
+    days_str = (", ~" + str(ssd_est["days_remaining"]) + " days left") if ssd_est else ""
+    disk_ok_msg = str(disk.get("used_percent", "?")) + "% used, " + str(disk.get("free_human", "?")) + " free" + days_str
     disk_fail_msg = "ERROR or " + str(disk.get("used_percent", "?")) + "% used"
     summary.append("  SSD         " + check(disk_ok, disk_ok_msg, disk_fail_msg))
     for cam_key in ("cam1", "cam2"):
@@ -451,17 +544,34 @@ def render_text_report(status):
             "SSD " + disk["path"] + ": used " + disk["used_human"] + " / " + disk["total_human"]
             + " (" + str(disk["used_percent"]) + "%), free " + disk["free_human"]
         )
+        ssd_est = status.get("ssd_days_remaining")
+        if ssd_est:
+            lines.append(
+                "SSD est. days remaining: " + str(ssd_est["days_remaining"])
+                + " (writing " + ssd_est["daily_rate_human"] + ")"
+            )
 
     lines.append("")
     for cam_key in ("cam1", "cam2"):
         cam = cams[cam_key]
         if cam["reachable"]:
-            dur = cam.get("yesterday_duration_human")
-            dur_str = (", yesterday recording duration=" + dur) if dur else ", yesterday recording duration=none"
+            dur = cam.get("yesterday_duration_human", "0m")
             lines.append(
                 cam_key + " (" + cam["ip"] + "): reachable, completed=" + str(cam["completed_count"])
-                + ", active=" + str(cam["active_count"]) + dur_str
+                + ", active=" + str(cam["active_count"])
+                + ", yesterday=" + dur
             )
+            sd = cam.get("sd_disk")
+            if sd:
+                days_left = sd.get("days_remaining")
+                days_str = (", ~" + str(days_left) + " days remaining") if days_left is not None else ""
+                lines.append(
+                    "  SD card: used " + sd["used_human"] + " / " + sd["total_human"]
+                    + " (" + str(sd["used_percent"]) + "%), free " + sd["free_human"] + days_str
+                )
+            oldest = cam.get("oldest_recording_local")
+            if oldest:
+                lines.append("  Oldest recording on card: " + oldest)
         else:
             lines.append(cam_key + " (" + cam["ip"] + "): UNREACHABLE: " + str(cam.get("error", "unknown error")))
 
@@ -538,6 +648,20 @@ def main():
 
     cam1 = axis_record_summary(cam1_name, cam1_ip, axis_user, axis_password, site_tz)
     cam2 = axis_record_summary(cam2_name, cam2_ip, axis_user, axis_password, site_tz)
+    cam1["sd_disk"] = get_camera_disk_info(cam1_ip, axis_user, axis_password)
+    cam2["sd_disk"] = get_camera_disk_info(cam2_ip, axis_user, axis_password)
+
+    for cam in (cam1, cam2):
+        sd = cam.get("sd_disk")
+        total_dur = cam.get("total_completed_duration_secs", 0)
+        if sd and total_dur > 0:
+            bytes_per_sec = sd["used_bytes"] / total_dur
+            if bytes_per_sec > 0:
+                sd["days_remaining"] = round(sd["free_bytes"] / bytes_per_sec / 86400)
+            else:
+                sd["days_remaining"] = None
+        elif sd:
+            sd["days_remaining"] = None
 
     systemd_pull = get_systemd_pull_info()
     pull_status = read_json_file(pull_status_json_path)
@@ -585,6 +709,7 @@ def main():
             "cam2": latest_files_summary("cam2", ssd_path),
         },
         "public_ip": maybe_get_public_ip(),
+        "ssd_days_remaining": estimate_ssd_days_remaining(ssd_path),
     }
 
     report_text = render_text_report(status)
@@ -618,6 +743,8 @@ def main():
         cam = status["cameras"][cam_key]
         if not cam.get("reachable"):
             alerts.append("Camera " + cam_key + " (" + cam["ip"] + ") is UNREACHABLE")
+        elif cam.get("yesterday_duration_secs", 0) == 0:
+            alerts.append("Camera " + cam_key + " (" + cam["ip"] + ") has NO recording from yesterday")
     pull_rc = args.pull_exit_code
     if pull_rc is not None and pull_rc != 0:
         alerts.append("Pull script exited with code " + str(pull_rc))
