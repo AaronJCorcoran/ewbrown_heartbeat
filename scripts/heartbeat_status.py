@@ -135,6 +135,16 @@ def get_disk_usage(path_str):
         return {"path": str(path), "error": str(e)}
 
 
+def get_pi_temperature():
+    """Read Pi CPU temperature from sysfs. Returns float degrees C or None."""
+    try:
+        raw = Path("/sys/class/thermal/thermal_zone0/temp").read_text().strip()
+        return round(int(raw) / 1000.0, 1)
+    except Exception as e:
+        logging.warning("Could not read Pi temperature: %s", e)
+        return None
+
+
 def axis_record_summary(name, ip, axis_user, axis_password):
     url = f"http://{ip}/axis-cgi/record/list.cgi?recordingid=all"
     cmd = [
@@ -280,7 +290,7 @@ def fetch_camera_snapshot(name, ip, axis_user, axis_password):
         "--fail",
         "--anyauth",
         "--max-time", "15",
-        "--user", f"{axis_user}:{axis_password}",
+        "--user", axis_user + ":" + axis_password,
         url,
     ]
     try:
@@ -292,7 +302,7 @@ def fetch_camera_snapshot(name, ip, axis_user, axis_password):
     return None
 
 
-def send_email(subject, body, snapshots=None):
+def send_email(subject, body, snapshots=None, to_override=None):
     """Send heartbeat email. snapshots is a list of (filename, jpeg_bytes) tuples."""
     if getenv("HEARTBEAT_ENABLE_EMAIL", "0") != "1":
         return False, "email disabled"
@@ -302,7 +312,7 @@ def send_email(subject, body, snapshots=None):
     smtp_user = getenv("SMTP_USER")
     smtp_password = getenv("SMTP_PASSWORD")
     smtp_from = getenv("SMTP_FROM")
-    smtp_to = getenv("SMTP_TO")
+    smtp_to = to_override or getenv("SMTP_TO")
 
     missing = [
         k
@@ -317,7 +327,7 @@ def send_email(subject, body, snapshots=None):
     ]
 
     if missing:
-        return False, f"missing SMTP config: {', '.join(missing)}"
+        return False, "missing SMTP config: " + ", ".join(missing)
 
     msg = EmailMessage()
     msg["Subject"] = subject
@@ -345,22 +355,54 @@ def render_text_report(status):
     pull = status["last_pull"]
     disk = status["ssd"]
 
+    def check(ok, ok_msg, fail_msg):
+        label = "OK    " if ok else "FAIL  "
+        return label + (ok_msg if ok else fail_msg)
+
+    # --- Quick Check summary ---
+    pi_temp = status.get("pi_temp_c")
+    summary = []
+    summary.append("  Pi online   " + check(True, "uptime " + status["uptime"], ""))
+    if pi_temp is not None:
+        temp_ok = pi_temp < 70
+        summary.append("  Pi temp     " + check(temp_ok, str(pi_temp) + " C", str(pi_temp) + " C -- HIGH"))
+    disk_ok = "error" not in disk and disk.get("used_percent", 100) < 80
+    disk_ok_msg = str(disk.get("used_percent", "?")) + "% used, " + str(disk.get("free_human", "?")) + " free"
+    disk_fail_msg = "ERROR or " + str(disk.get("used_percent", "?")) + "% used"
+    summary.append("  SSD         " + check(disk_ok, disk_ok_msg, disk_fail_msg))
+    for cam_key in ("cam1", "cam2"):
+        cam = cams[cam_key]
+        cam_ok = cam.get("reachable", False)
+        cam_ok_msg = "completed=" + str(cam.get("completed_count", "?")) + ", active=" + str(cam.get("active_count", "?"))
+        cam_fail_msg = str(cam.get("error", "unreachable"))
+        summary.append(("  " + cam_key).ljust(14) + check(cam_ok, cam_ok_msg, cam_fail_msg))
+    pull_ok = pull.get("pull_exit_code") in (0, None)
+    pull_rc = str(pull.get("pull_exit_code", "n/a"))
+    summary.append("  Pull        " + check(pull_ok, "exit " + pull_rc, "exit " + pull_rc))
+
     lines = []
-    lines.append(f"Field heartbeat: {status['site_name']}")
-    lines.append(f"Local time: {status['local_time']}")
-    lines.append(f"UTC time:   {status['utc_time']}")
+    lines.append("Field heartbeat: " + status["site_name"])
+    lines.append("Local time: " + status["local_time"])
     lines.append("")
-    lines.append(f"Pi hostname: {status['pi_hostname']}")
-    lines.append(f"Pi LAN IP:   {status['pi_lan_ip']}")
-    lines.append(f"Uptime:      {status['uptime']}")
+    lines.append("=== Quick Check ===")
+    lines.extend(summary)
+    lines.append("===================")
+    lines.append("")
+    lines.append("UTC time:   " + status["utc_time"])
+    lines.append("")
+    lines.append("Pi hostname: " + status["pi_hostname"])
+    lines.append("Pi LAN IP:   " + status["pi_lan_ip"])
+    lines.append("Uptime:      " + status["uptime"])
+    if pi_temp is not None:
+        lines.append("Pi CPU temp: " + str(pi_temp) + " C")
     lines.append("")
 
     if "error" in disk:
-        lines.append(f"SSD: ERROR reading {disk['path']}: {disk['error']}")
+        lines.append("SSD: ERROR reading " + disk["path"] + ": " + disk["error"])
     else:
         lines.append(
-            f"SSD {disk['path']}: used {disk['used_human']} / {disk['total_human']} "
-            f"({disk['used_percent']}%), free {disk['free_human']}"
+            "SSD " + disk["path"] + ": used " + disk["used_human"] + " / " + disk["total_human"]
+            + " (" + str(disk["used_percent"]) + "%), free " + disk["free_human"]
         )
 
     lines.append("")
@@ -368,47 +410,46 @@ def render_text_report(status):
         cam = cams[cam_key]
         if cam["reachable"]:
             lines.append(
-                f"{cam_key} ({cam['ip']}): reachable, completed={cam['completed_count']}, "
-                f"active={cam['active_count']}"
+                cam_key + " (" + cam["ip"] + "): reachable, completed=" + str(cam["completed_count"])
+                + ", active=" + str(cam["active_count"])
             )
         else:
-            lines.append(f"{cam_key} ({cam['ip']}): UNREACHABLE: {cam.get('error', 'unknown error')}")
+            lines.append(cam_key + " (" + cam["ip"] + "): UNREACHABLE: " + str(cam.get("error", "unknown error")))
 
     lines.append("")
-
-    lines.append(f"Pull service result: {pull.get('service_result', 'unknown')}")
-    lines.append(f"Pull exit code:      {pull.get('pull_exit_code', 'unknown')}")
-    lines.append(f"Last pull time:      {pull.get('last_successful_pull_time', 'unknown')}")
+    lines.append("Pull service result: " + str(pull.get("service_result", "unknown")))
+    lines.append("Pull exit code:      " + str(pull.get("pull_exit_code", "unknown")))
+    lines.append("Last pull time:      " + str(pull.get("last_successful_pull_time", "unknown")))
 
     exported = pull.get("exported_total")
     if exported is None:
         lines.append("Exported last run:   unavailable")
     else:
-        lines.append(f"Exported last run:   {exported}")
+        lines.append("Exported last run:   " + str(exported))
 
-    lines.append(f"Any recording active now: {status['any_recording_active_now']}")
+    lines.append("Any recording active now: " + str(status["any_recording_active_now"]))
 
     if status.get("public_ip"):
-        lines.append(f"Public/WAN IP: {status['public_ip']}")
+        lines.append("Public/WAN IP: " + status["public_ip"])
 
     lines.append("")
 
     latest = status.get("latest_files", {})
     for cam_key in ("cam1", "cam2"):
-        lines.append(f"Latest files on SSD for {cam_key}:")
+        lines.append("Latest files on SSD for " + cam_key + ":")
         items = latest.get(cam_key, [])
         if not items:
             lines.append("  (none found)")
         else:
             for item in items:
-                lines.append(f"  {item['name']} [{item['size_human']}]")
+                lines.append("  " + item["name"] + " [" + item["size_human"] + "]")
         lines.append("")
 
     errors = pull.get("recent_error_lines", [])
     if errors:
         lines.append("Recent pull log errors:")
         for line in errors:
-            lines.append(f"  {line}")
+            lines.append("  " + line)
     else:
         lines.append("Recent pull log errors: none detected")
 
@@ -429,7 +470,7 @@ def main():
     pi_lan_ip = get_lan_ip()
     ssd_path = getenv("SSD_PATH", "/mnt/video_ssd")
 
-    axis_user = getenv("AXIS_USER", "admin")
+    axis_user = getenv("AXIS_USER", "root")
     axis_password = getenv("AXIS_PASSWORD", "")
 
     cam1_name = getenv("CAM1_NAME", "cam1")
@@ -441,6 +482,10 @@ def main():
     pull_status_json_path = getenv("PULL_STATUS_JSON", "/home/admin/fieldcam/state/last_pull_status.json")
 
     utc_now, local_now = now_times(site_tz)
+
+    alert_disk_threshold = int(getenv("ALERT_DISK_THRESHOLD", "80"))
+    alert_temp_threshold = float(getenv("ALERT_TEMP_THRESHOLD", "70"))
+    alert_email_to = getenv("ALERT_EMAIL_TO") or getenv("SMTP_TO")
 
     cam1 = axis_record_summary(cam1_name, cam1_ip, axis_user, axis_password)
     cam2 = axis_record_summary(cam2_name, cam2_ip, axis_user, axis_password)
@@ -462,6 +507,8 @@ def main():
     else:
         last_successful_pull_time = systemd_pull.get("ExecMainExitTimestamp") or systemd_pull.get("ActiveExitTimestamp")
 
+    pi_temp = get_pi_temperature()
+
     status = {
         "site_name": site_name,
         "utc_time": utc_now.isoformat(),
@@ -469,6 +516,7 @@ def main():
         "pi_hostname": pi_hostname,
         "pi_lan_ip": pi_lan_ip,
         "uptime": get_uptime(),
+        "pi_temp_c": pi_temp,
         "ssd": get_disk_usage(ssd_path),
         "cameras": {
             "cam1": cam1,
@@ -504,16 +552,47 @@ def main():
             jpeg = fetch_camera_snapshot(cam_key, cam_ip, axis_user, axis_password)
             if jpeg:
                 ts = local_now.strftime("%Y%m%d_%H%M%S")
-                snapshots.append((f"{cam_name}_{ts}.jpg", jpeg))
+                snapshots.append((cam_name + "_" + ts + ".jpg", jpeg))
                 logging.info("Snapshot fetched for %s (%d bytes)", cam_key, len(jpeg))
             else:
                 logging.warning("Snapshot fetch returned nothing for %s", cam_key)
 
-    subject = f"[{site_name}] daily heartbeat {local_now.strftime('%Y-%m-%d %H:%M:%S %Z')}"
+    subject = "[" + site_name + "] daily heartbeat " + local_now.strftime("%Y-%m-%d %H:%M:%S %Z")
     email_ok, email_msg = send_email(subject, report_text, snapshots=snapshots)
 
     logging.info("Heartbeat written to %s and %s", HEARTBEAT_JSON, HEARTBEAT_TXT)
     logging.info("Email status: %s (%s)", "ok" if email_ok else "not sent", email_msg)
+
+    # --- Alert email ---
+    alerts = []
+    for cam_key in ("cam1", "cam2"):
+        cam = status["cameras"][cam_key]
+        if not cam.get("reachable"):
+            alerts.append("Camera " + cam_key + " (" + cam["ip"] + ") is UNREACHABLE")
+    pull_rc = args.pull_exit_code
+    if pull_rc is not None and pull_rc != 0:
+        alerts.append("Pull script exited with code " + str(pull_rc))
+    disk = status["ssd"]
+    if "used_percent" in disk and disk["used_percent"] >= alert_disk_threshold:
+        alerts.append(
+            "SSD usage is " + str(disk["used_percent"]) + "% "
+            + "(" + disk["used_human"] + " used, " + disk["free_human"] + " free)"
+            + " -- threshold " + str(alert_disk_threshold) + "%"
+        )
+    if pi_temp is not None and pi_temp >= alert_temp_threshold:
+        alerts.append("Pi CPU temperature is " + str(pi_temp) + " C -- threshold " + str(alert_temp_threshold) + " C")
+
+    if alerts:
+        alert_lines = ["ALERT: " + site_name + " -- " + local_now.strftime("%Y-%m-%d %H:%M:%S %Z"), ""]
+        for a in alerts:
+            alert_lines.append("  !! " + a)
+        alert_lines += ["", "--- Full heartbeat report ---", "", report_text]
+        alert_body = "\n".join(alert_lines)
+        alert_subject = "[ALERT] [" + site_name + "] " + ", ".join(alerts[:2])
+        _, alert_msg = send_email(alert_subject, alert_body, to_override=alert_email_to)
+        logging.warning("Alert email sent: %s", alert_msg)
+    else:
+        logging.info("No alert conditions detected")
 
 
 if __name__ == "__main__":
