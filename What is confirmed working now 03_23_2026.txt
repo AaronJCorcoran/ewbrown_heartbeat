@@ -1,6 +1,6 @@
 EW Brown Field Video System — Confirmed Working State
 ======================================================
-Last updated: 2026-03-23
+Last updated: 2026-03-23 (end of day)
 
 
 SYSTEM OVERVIEW
@@ -15,6 +15,12 @@ Cameras:        2x AXIS Q1972-E
 SSD mountpoint: /mnt/video_ssd (exFAT, UUID FFE1-C073)
 fstab entry:    UUID=FFE1-C073 /mnt/video_ssd exfat defaults,nofail,uid=1000,gid=1000,umask=0022 0 0
 
+Pi health (observed):
+  Memory:       239 MB used / 7.6 GB total — mostly idle
+  CPU:          Load average 0.00 between runs
+  Root disk:    4.7 GB used / 59 GB (9%)
+  Temp:         ~35-37 C at idle
+
 Note: Cellular SIM not yet installed. Current testing is on home LAN.
 
 
@@ -25,7 +31,7 @@ State file:     /home/admin/fieldcam/state/exported_recordings.json
 Log:            /home/admin/fieldcam/logs/pull_axis_recordings.log
 Export dirs:    /mnt/video_ssd/cam1, /mnt/video_ssd/cam2
 Format:         .mkv (HEVC, 640x480, 30fps observed)
-Axis API user:  root  (not admin)
+Axis API user:  root  (not admin — using admin returns 401)
 
 Behavior verified:
 - Lists recordings from each camera via /axis-cgi/record/list.cgi?recordingid=all
@@ -33,7 +39,8 @@ Behavior verified:
 - Exports only completed recordings
 - Duplicate suppression via JSON state file works correctly
 - At least one exported .mkv verified readable with ffprobe
-- A prior event-id mismatch on cam1 was fixed
+- cam1 has a lingering event ID typo on the camera ("record_at_ngith") — fix in
+  camera event rule settings. Does not affect pull (cam1 event_id=None in script).
 
 
 SCHEDULING (confirmed working)
@@ -41,7 +48,7 @@ SCHEDULING (confirmed working)
 Service:        pull-axis-recordings.service
 Timer:          pull-axis-recordings.timer
 Schedule:       Daily at 08:15 local time
-Timer fires wrapper script, which runs pull then heartbeat in sequence.
+Execution:      Timer fires wrapper → pull script → heartbeat script
 
 
 HEARTBEAT BUNDLE (confirmed working as of 2026-03-23)
@@ -55,20 +62,46 @@ Outputs:
   /home/admin/fieldcam/state/last_heartbeat.txt    — human-readable report
   /home/admin/fieldcam/logs/heartbeat_status.log   — execution log
 
-Email:          Enabled. Sends to aaron.j.corcoran@gmail.com via smtp.gmail.com:587
+Email:          Enabled. Sends to aaron@thrutrackeranalytics.com
+                From: aaron.j.corcoran@gmail.com via smtp.gmail.com:587
                 Uses Gmail App Password (not real Gmail password)
 
-Behavior verified:
-- Both cameras reachable and reporting (completed + active counts)
-- Disk usage reported correctly (1.9 GB used / 931.5 GB total on first run)
-- Pull service result and exit code captured
-- Latest files per camera listed
-- Email delivered successfully to Gmail
+Report includes (Quick Check summary + detail):
+- Pi uptime, CPU temperature
+- SSD used/free/% with estimated days remaining (based on write rate)
+- Per camera: reachable, completed/active recording count
+- Per camera: yesterday's total recording duration (sum of completed recordings
+  that started on the previous calendar day in local time)
+- Per camera: SD card used/free/% with estimated days remaining
+- Per camera: oldest recording on SD card (indicates buffer depth before overwrite)
+- Per camera: live JPEG snapshot attached to email
+- Pull service result and exit code
+- Latest 3 files on SSD per camera
+- Recent pull log errors
+
+Alert emails:
+- Sent separately when any of the following are detected:
+  - Camera unreachable
+  - Camera reachable but no recording from yesterday (gap alert)
+  - Pull exit code non-zero
+  - SSD usage >= ALERT_DISK_THRESHOLD (default 80%)
+  - Pi CPU temp >= ALERT_TEMP_THRESHOLD (default 70 C)
+- Subject line starts with [ALERT] for easy Gmail filtering
+- ALERT_EMAIL_TO can be set to route alerts to a different address
+
+
+CAMERA SD CARDS (observed 2026-03-23)
+---------------------------------------
+Both cameras: 444.4 GB total (ext4 filesystem, cleanuppolicy=fifo)
+cam1:  ~421 MB used, ~444 GB free, oldest recording 2026-03-23 18:00 EDT
+cam2:  ~1.2 GB used, ~443 GB free, oldest recording 2026-03-22 21:40 EDT
+Note: FIFO policy means cameras auto-overwrite oldest recordings when full.
 
 
 CREDENTIALS & AUTH
 -------------------
 - Axis API username: root (password stored in heartbeat.env only)
+- Axis disk API:     /axis-cgi/disks/list.cgi?diskid=all (sizes in KB)
 - heartbeat.env is chmod 600, never committed to git
 - SSH key auth configured from Aaron's XPS13 to pi1 (no password needed for scp/ssh)
 - Gmail SMTP uses App Password, not real Gmail password
@@ -80,7 +113,21 @@ KNOWN GOTCHAS
 - Axis API times are UTC; filenames and logs preserve UTC
 - Active recordings must never be exported; only recordingstatus="completed"
 - ffprobe checks must be run one file at a time, not with a bare wildcard
+- cam1 has event ID typo "record_at_ngith" on camera — causes yesterday=0m in
+  heartbeat until fixed on camera. Fix in camera event rule settings.
 - INCLUDE_PUBLIC_IP is currently disabled (0); enable once cellular SIM is installed
+- SSD days-remaining estimate requires >1 day of file history; shows on day 2+
+- SD days-remaining estimate is based on used bytes / total completed recording
+  duration — stabilizes after more recordings accumulate
+
+
+FUTURE WORK (not yet implemented)
+-----------------------------------
+- SD card alert threshold (currently only SSD has a usage alert)
+- ffprobe integrity check on newest exported file per camera
+- Pi memory/load in heartbeat report
+- Cellular signal strength via RUT241 REST API (once SIM installed)
+- Weekly summary email (rolling 7-day view)
 
 
 GITHUB
