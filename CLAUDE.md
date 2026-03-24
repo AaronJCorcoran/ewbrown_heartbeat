@@ -58,6 +58,8 @@ All configuration is read from environment variables (loaded by the systemd unit
 
 Key variables: `SITE_NAME`, `SITE_TZ`, `PI_HOSTNAME`, `PI_LAN_IP`, `SSD_PATH`, `CAM1_NAME`, `CAM1_IP`, `CAM2_NAME`, `CAM2_IP`, `AXIS_USER`, `AXIS_PASSWORD`. Email and public IP lookup are opt-in (`HEARTBEAT_ENABLE_EMAIL=1`, `INCLUDE_PUBLIC_IP=1`).
 
+**Important:** Axis cameras use `root` as the API username, not `admin`. Set `AXIS_USER=root`. Gmail SMTP requires an App Password (not your real password) — generate one at myaccount.google.com → Security → App Passwords.
+
 ### systemd Unit (`systemd/pull-axis-recordings.service`)
 
 - `Type=oneshot`, runs as `admin` user

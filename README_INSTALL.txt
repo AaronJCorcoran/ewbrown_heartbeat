@@ -46,8 +46,9 @@ Install the files on the Pi
    /home/admin/fieldcam/config/heartbeat.env
 
 2. Edit /home/admin/fieldcam/config/heartbeat.env and set real values for:
+   - AXIS_USER=root  (Axis cameras use root, not admin)
    - AXIS_PASSWORD
-   - SMTP_* values if email will be enabled later
+   - SMTP_* values if email will be enabled (Gmail requires an App Password, not your real password)
 
 3. Copy run_pull_then_heartbeat.sh to:
    /home/admin/fieldcam/scripts/run_pull_then_heartbeat.sh
@@ -87,9 +88,23 @@ cat /home/admin/fieldcam/state/last_heartbeat.txt
 jq . /home/admin/fieldcam/state/last_heartbeat.json
 tail -n 100 /home/admin/fieldcam/logs/heartbeat_status.log
 
+Deploying from Windows via scp
+------------------------------
+
+If deploying from a Windows machine, set up SSH key auth first (one-time):
+
+  ssh-keygen -t ed25519 -C "your-machine-name"
+  type $env:USERPROFILE\.ssh\id_ed25519.pub | ssh admin@192.168.50.127 "mkdir -p ~/.ssh && cat >> ~/.ssh/authorized_keys"
+
+Then scp files without password prompts:
+
+  scp config/heartbeat.env admin@192.168.50.127:/home/admin/fieldcam/config/heartbeat.env
+  scp scripts/heartbeat_status.py scripts/run_pull_then_heartbeat.sh admin@192.168.50.127:/home/admin/fieldcam/scripts/
+  scp systemd/pull-axis-recordings.service admin@192.168.50.127:/tmp/
+
 Notes
 -----
 
 - The existing timer can remain unchanged.
+- Set INCLUDE_PUBLIC_IP=1 in heartbeat.env once the cellular SIM is installed to include WAN IP in reports.
 - This heartbeat script can use /home/admin/fieldcam/state/last_pull_status.json if the pull script is later enhanced to write a structured run summary.
-- Until then, the heartbeat still reports camera reachability, active/completed counts, disk usage, recent pull errors, and latest files on SSD.
