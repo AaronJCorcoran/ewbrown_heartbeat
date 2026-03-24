@@ -271,7 +271,29 @@ def maybe_get_public_ip():
     return None
 
 
-def send_email(subject, body):
+def fetch_camera_snapshot(name, ip, axis_user, axis_password):
+    """Fetch a JPEG snapshot from an Axis camera. Returns bytes or None."""
+    url = f"http://{ip}/axis-cgi/jpg/image.cgi"
+    cmd = [
+        "curl",
+        "--silent",
+        "--fail",
+        "--anyauth",
+        "--max-time", "15",
+        "--user", f"{axis_user}:{axis_password}",
+        url,
+    ]
+    try:
+        result = subprocess.run(cmd, capture_output=True, timeout=20)
+        if result.returncode == 0 and result.stdout:
+            return result.stdout
+    except Exception as e:
+        logging.warning("Snapshot fetch failed for %s: %s", name, e)
+    return None
+
+
+def send_email(subject, body, snapshots=None):
+    """Send heartbeat email. snapshots is a list of (filename, jpeg_bytes) tuples."""
     if getenv("HEARTBEAT_ENABLE_EMAIL", "0") != "1":
         return False, "email disabled"
 
@@ -302,6 +324,9 @@ def send_email(subject, body):
     msg["From"] = smtp_from
     msg["To"] = smtp_to
     msg.set_content(body)
+
+    for filename, jpeg_bytes in (snapshots or []):
+        msg.add_attachment(jpeg_bytes, maintype="image", subtype="jpeg", filename=filename)
 
     context = ssl.create_default_context()
 
@@ -470,8 +495,22 @@ def main():
     write_json_atomic(HEARTBEAT_JSON, status)
     write_text_atomic(HEARTBEAT_TXT, report_text)
 
+    snapshots = []
+    for cam_key, cam_name, cam_ip in [
+        ("cam1", cam1_name, cam1_ip),
+        ("cam2", cam2_name, cam2_ip),
+    ]:
+        if status["cameras"][cam_key].get("reachable"):
+            jpeg = fetch_camera_snapshot(cam_key, cam_ip, axis_user, axis_password)
+            if jpeg:
+                ts = local_now.strftime("%Y%m%d_%H%M%S")
+                snapshots.append((f"{cam_name}_{ts}.jpg", jpeg))
+                logging.info("Snapshot fetched for %s (%d bytes)", cam_key, len(jpeg))
+            else:
+                logging.warning("Snapshot fetch returned nothing for %s", cam_key)
+
     subject = f"[{site_name}] daily heartbeat {local_now.strftime('%Y-%m-%d %H:%M:%S %Z')}"
-    email_ok, email_msg = send_email(subject, report_text)
+    email_ok, email_msg = send_email(subject, report_text, snapshots=snapshots)
 
     logging.info("Heartbeat written to %s and %s", HEARTBEAT_JSON, HEARTBEAT_TXT)
     logging.info("Email status: %s (%s)", "ok" if email_ok else "not sent", email_msg)
