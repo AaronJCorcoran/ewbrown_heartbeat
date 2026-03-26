@@ -1,0 +1,47 @@
+EW BROWN FIELD CHECKLIST
+========================
+
+
+ARRIVAL INSPECTION
+------------------
+
+Equipment cabinet:
+
+  [ ] Power strip       — orange light ON
+  [ ] RUT241 router     — 3 small green lights blinking
+  [ ] Netgear switch    — green power light ON
+                          green lights on three grey ethernet ports
+                          orange light on blue LAN port
+  [ ] Pi                — green AND orange lights on ethernet port
+
+
+HARD DRIVE SWAP PROCEDURE
+--------------------------
+
+*** CRITICAL TO FOLLOW THIS ORDER PRECISELY ***
+
+  1. Unplug power to Pi
+  2. Swap SSD hard drive (leave cable in place)
+  3. Confirm new drive is fully seated
+  4. Plug power back into Pi
+  5. Wait 60 seconds for Pi to fully boot
+  6. Write today's date and your initials on the removed drive
+  7. Write today's date and initials on log in enclosure
+
+DEPARTURE CONFIRMATION
+-----------------------
+
+  *** CRITICAL ***
+
+  [ ] 1. PI POWER IS PLUGGED BACK IN
+  [ ] 2. PI ORANGE AND GREEN ETHERNET LIGHTS ARE ON
+  [ ] 3. Removed drive is labeled with date and initials
+  [ ] 4. Close lid to enclosure
+
+
+CAMERA CHECKS
+--------------
+
+  [ ] 1. Check cables for wear or rodent damage
+  [ ] 2. Check tripods and camera orientation
+  [ ] 3. Wipe lenses carefully with provided lens wipes

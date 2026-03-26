@@ -10,6 +10,7 @@ import smtplib
 import socket
 import ssl
 import subprocess
+import time
 from datetime import datetime, timedelta, timezone
 from email.message import EmailMessage
 from pathlib import Path
@@ -507,14 +508,55 @@ def send_email(subject, body, snapshots=None, to_override=None):
 
     context = ssl.create_default_context()
 
+    max_attempts = 3
+    retry_delay = 30  # seconds between retries
+
+    for attempt in range(1, max_attempts + 1):
+        try:
+            with smtplib.SMTP(smtp_host, smtp_port, timeout=20) as server:
+                server.starttls(context=context)
+                server.login(smtp_user, smtp_password)
+                server.send_message(msg)
+            return True, "sent" + (" (attempt %d)" % attempt if attempt > 1 else "")
+        except Exception as e:
+            last_error = str(e)
+            if attempt < max_attempts:
+                logging.warning("Email attempt %d/%d failed: %s — retrying in %ds",
+                                attempt, max_attempts, last_error, retry_delay)
+                time.sleep(retry_delay)
+            else:
+                logging.warning("Email attempt %d/%d failed: %s — waiting 30m for final retry",
+                                attempt, max_attempts, last_error)
+
+    # Deferred final retry after 30 minutes
+    time.sleep(30 * 60)
     try:
         with smtplib.SMTP(smtp_host, smtp_port, timeout=20) as server:
             server.starttls(context=context)
             server.login(smtp_user, smtp_password)
             server.send_message(msg)
-        return True, "sent"
+        logging.info("Email sent on deferred retry (30m)")
+        return True, "sent (deferred retry)"
     except Exception as e:
+        logging.warning("Deferred email retry failed: %s — giving up", e)
         return False, str(e)
+
+
+def save_heartbeat_to_ssd(ssd_path, json_obj, text_report, local_now):
+    """Save timestamped heartbeat copies to SSD for history."""
+    ssd = Path(ssd_path)
+    hb_dir = ssd / "heartbeat_history"
+    try:
+        if not ssd.is_mount():
+            logging.warning("SSD not mounted at %s -- skipping heartbeat backup", ssd_path)
+            return
+        hb_dir.mkdir(exist_ok=True)
+        ts = local_now.strftime("%Y%m%d_%H%M%S")
+        write_json_atomic(hb_dir / ("heartbeat_" + ts + ".json"), json_obj)
+        write_text_atomic(hb_dir / ("heartbeat_" + ts + ".txt"), text_report)
+        logging.info("Heartbeat backup saved to %s", hb_dir)
+    except Exception as e:
+        logging.warning("Failed to save heartbeat to SSD: %s", e)
 
 
 def render_text_report(status):
@@ -765,6 +807,7 @@ def main():
 
     write_json_atomic(HEARTBEAT_JSON, status)
     write_text_atomic(HEARTBEAT_TXT, report_text)
+    save_heartbeat_to_ssd(ssd_path, status, report_text, local_now)
 
     snapshots = []
     for cam_key, cam_name, cam_ip in [

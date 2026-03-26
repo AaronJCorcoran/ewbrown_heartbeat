@@ -1,7 +1,7 @@
 [Unit]
 Description=Pull completed Axis recordings to SSD and generate heartbeat
 Wants=network-online.target
-After=network-online.target
+After=network-online.target home-admin-fieldcam-state.mount home-admin-fieldcam-logs.mount
 
 [Service]
 Type=oneshot
@@ -10,6 +10,8 @@ Group=admin
 WorkingDirectory=/home/admin/fieldcam
 EnvironmentFile=/home/admin/fieldcam/config/heartbeat.env
 ExecStart=/home/admin/fieldcam/scripts/run_pull_then_heartbeat.sh
+TimeoutStartSec=5400
+TimeoutStopSec=30
 
 [Install]
 WantedBy=multi-user.target

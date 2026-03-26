@@ -39,7 +39,7 @@ systemd timer (daily 08:15)
             → heartbeat_status.py       (receives pull exit code as --pull-exit-code)
 ```
 
-The wrapper captures the pull script's exit code, passes it to the heartbeat, then returns it so pull failures still register in systemd.
+The wrapper checks that the SSD is mounted before running the pull script. If the SSD is missing, the pull is skipped (exit code 99) and the heartbeat still runs so the alert email goes out. The pull exit code is passed to the heartbeat, then returned so pull failures still register in systemd.
 
 ### Main Script: `scripts/heartbeat_status.py`
 
@@ -53,7 +53,8 @@ All config from environment variables loaded via `EnvironmentFile` in the system
 5. Calls `systemctl show` for pull service metadata
 6. Estimates SSD days remaining from write rate since oldest file on SSD
 7. Writes output atomically to `state/last_heartbeat.json` and `state/last_heartbeat.txt`
-8. Sends daily email with snapshots attached; sends separate alert email if any condition triggers
+8. Saves timestamped heartbeat copies to `SSD/heartbeat_history/` for audit trail
+9. Sends daily email with snapshots attached (retries 3x at 30s intervals, then once more after 30 minutes); sends separate alert email if any condition triggers
 
 ### Alert Conditions
 
@@ -76,6 +77,24 @@ Enable `INCLUDE_PUBLIC_IP=1` once the cellular SIM is installed.
 
 - `Type=oneshot`, runs as `admin` user, loads `heartbeat.env` via `EnvironmentFile`
 - Triggered by `pull-axis-recordings.timer` (daily at 08:15 local time, not included in this bundle)
+- `TimeoutStartSec=5400` (90 min) kills hung pulls/retries; `TimeoutStopSec=30` for cleanup
+
+### SSD Drive Swapping
+
+Eight 1TB SSDs formatted exFAT with volume label `FIELDCAM` and `cam1/`+`cam2/` directories. Pi mounts by label (`LABEL=FIELDCAM` in fstab), so any drive works without config changes. Format drives on Windows using `scripts/format_fieldcam_drive.ps1` (Run as Administrator).
+
+Swap procedure: power off Pi, swap SSD (leave cable), power on Pi.
+
+State and logs are bind-mounted from the SSD (`/mnt/video_ssd/pi_state` and `/mnt/video_ssd/pi_logs`) so they persist on each drive and travel with the recordings.
+
+### Resilience
+
+- **Mount check**: Wrapper script verifies SSD is mounted before pulling; skips pull with exit code 99 if missing
+- **Email retry**: 3 attempts at 30s intervals + 1 deferred retry after 30 minutes
+- **Hardware watchdog**: systemd pets BCM2835 watchdog every 7.5s; Pi auto-reboots if OS hangs for 15s
+- **Heartbeat history**: Timestamped copies saved to `SSD/heartbeat_history/` for offline audit
+- **Service timeout**: systemd kills the service after 90 minutes if it hangs
+- **Bind mounts**: State/logs stored on SSD via systemd mount units, surviving SD card issues
 
 ## Runtime Requirements
 
