@@ -19,9 +19,22 @@ SSH key auth is configured from the development machine to pi1 — no password n
 | `config/heartbeat.env.example` | `/home/admin/fieldcam/config/heartbeat.env` (fill in, chmod 600) |
 | `scripts/run_pull_then_heartbeat.sh` | `/home/admin/fieldcam/scripts/` |
 | `scripts/heartbeat_status.py` | `/home/admin/fieldcam/scripts/` |
+| `scripts/pull_axis_recordings.py` | `/home/admin/fieldcam/scripts/` |
 | `systemd/pull-axis-recordings.service` | `/etc/systemd/system/` |
+| `systemd/pull-axis-recordings.timer` | `/etc/systemd/system/` |
+| `systemd/home-admin-fieldcam-state.mount` | `/etc/systemd/system/` |
+| `systemd/home-admin-fieldcam-logs.mount` | `/etc/systemd/system/` |
+| `config/chrony.conf` | `/etc/chrony/chrony.conf` |
+| `config/gpsd.conf` | `/etc/default/gpsd` |
+| `config/watchdog.conf` | `/etc/systemd/system.conf.d/watchdog.conf` |
 
-After copying the service unit: `sudo systemctl daemon-reload`
+After copying systemd units: `sudo systemctl daemon-reload`
+
+Pi setup prerequisites: `sudo apt-get install chrony gpsd gpsd-clients curl`
+
+Enable services: `sudo systemctl enable pull-axis-recordings.timer gpsd home-admin-fieldcam-state.mount home-admin-fieldcam-logs.mount`
+
+Set static IP: `sudo nmcli con mod <eth-connection> ipv4.method manual ipv4.addresses 192.168.50.127/24 ipv4.gateway 192.168.50.1 ipv4.dns 192.168.50.1`
 
 To test manually: `sudo systemctl start pull-axis-recordings.service`
 

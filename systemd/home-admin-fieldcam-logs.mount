@@ -1,0 +1,13 @@
+[Unit]
+Description=Bind-mount fieldcam logs from SSD
+After=mnt-video_ssd.mount
+Requires=mnt-video_ssd.mount
+
+[Mount]
+What=/mnt/video_ssd/pi_logs
+Where=/home/admin/fieldcam/logs
+Type=none
+Options=bind
+
+[Install]
+WantedBy=multi-user.target

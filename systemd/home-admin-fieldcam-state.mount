@@ -1,0 +1,13 @@
+[Unit]
+Description=Bind-mount fieldcam state from SSD
+After=mnt-video_ssd.mount
+Requires=mnt-video_ssd.mount
+
+[Mount]
+What=/mnt/video_ssd/pi_state
+Where=/home/admin/fieldcam/state
+Type=none
+Options=bind
+
+[Install]
+WantedBy=multi-user.target
