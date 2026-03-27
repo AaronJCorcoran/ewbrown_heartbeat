@@ -96,6 +96,20 @@ State and logs are bind-mounted from the SSD (`/mnt/video_ssd/pi_state` and `/mn
 - **Service timeout**: systemd kills the service after 90 minutes if it hangs
 - **Bind mounts**: State/logs stored on SSD via systemd mount units, surviving SD card issues
 
+### Cellular Connectivity
+
+Hologram Hyper eUICC G3 SIM in the RUT241. APN: `hologram`. Mobile interface (`mob1s1a1`) is the primary WAN. Daily data usage is ~2 MB (heartbeat email). Data limit set to 200 MB/month (pause). Disable WiFi client (`wifi1`) before field deployment to prevent unintended data routing.
+
+### GPS Time Source
+
+A u-blox 7 USB GPS receiver is connected to the Pi at `/dev/ttyACM0`. `gpsd` reads NMEA data and feeds time to `chrony` via shared memory (`refclock SHM 0`). Chrony config at `/etc/chrony/chrony.conf`:
+
+- **GPS** (primary when fix available) — works without internet
+- **NTP pool** (fallback via cellular) — used when GPS has no fix
+- **Local stratum 3** — serves time to cameras on the LAN (`allow 192.168.50.0/24`)
+
+The GPS needs clear sky view to acquire satellites. Cold start takes 5-15 minutes.
+
 ## Runtime Requirements
 
 - Python 3.9+ (`zoneinfo` module required)
