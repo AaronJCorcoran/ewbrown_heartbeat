@@ -1,0 +1,302 @@
+EW BROWN FIELD SETUP GUIDE
+===========================
+For use at site — works offline
+Last updated: 2026-04-05
+
+NETWORK REFERENCE
+-----------------
+  WiFi SSID:       RUT241_A1E0
+  WiFi Password:   ewbrown
+  Pi IP:           192.168.50.127
+  Camera 1 (cam1): 192.168.50.201
+  Camera 2 (cam2): 192.168.50.202
+  Router:          192.168.50.1
+  SSH login:       admin@192.168.50.127
+
+
+========================================
+STEP 1: POWER ON SEQUENCE
+========================================
+
+Power on in this order:
+  1. Power strip (orange light on)
+  2. Netgear switch
+  3. RUT241 router
+  4. Pi (plug in last)
+
+Wait 60 seconds for everything to boot before proceeding.
+
+
+========================================
+STEP 2: CONNECT TO LOCAL NETWORK
+========================================
+
+On your laptop:
+  - Connect to WiFi: RUT241_A1E0
+  - Password: ewbrown
+
+You do NOT need internet for any of the steps below.
+
+
+========================================
+STEP 3: VERIFY RUT241 LTE
+========================================
+
+Open browser → http://192.168.50.1
+Log in with RUT241 admin credentials.
+
+On the Status Overview page confirm:
+  [ ] MOB1S1A1 (MAIN) shows Status: Running
+  [ ] APN shows: hologram
+  [ ] IP address is assigned (10.x.x.x)
+  [ ] Signal strength shown (ideally better than -90 dBm)
+
+If LTE is not connected:
+  - Check SIM is inserted (slot on side of RUT241)
+  - Go to Network → Mobile → check APN is "hologram"
+  - Go to Network → WAN interfaces → confirm mob1s1a1 is at top (priority 1)
+  - Wait 2-3 minutes for modem to register on network
+
+Also verify:
+  [ ] wifi1 client interface is DISABLED (Network → WAN interfaces)
+      This prevents the router from connecting to random WiFi and wasting cellular data
+
+
+========================================
+STEP 4: VERIFY CAMERA SETTINGS
+========================================
+
+Open browser → http://192.168.50.201  (cam1)
+               http://192.168.50.202  (cam2)
+Log in: username = root, password = [Axis camera password]
+
+For EACH camera, verify:
+
+  [ ] A) Time settings correct
+      System → Date & Time
+      - Synchronize with NTP server: YES
+      - NTP server address: 192.168.50.127  (Pi is the NTP source)
+      - Current time shown looks correct
+
+  [ ] B) Recording event is enabled
+      Recording → Recording List
+      - Should show at least one active or scheduled recording
+      - Event name: record_at_night
+
+  [ ] C) SD card is healthy
+      System → Storage → SD Card
+      - Status: OK / Ready
+      - Free space > 400 GB
+
+  [ ] D) Recording schedule
+      Events → Action Rules or Recordings
+      - Start time: 18:00 (6pm local)
+      - Stop time: 12:00 (noon local) next day
+      - Status: Enabled
+
+  [ ] E) Image settings (while you're in)
+      Video → Video Stream
+      - Resolution: 640 x 512
+      - Frame rate: 30
+      - Video-> Overlays Timestamp
+      - Contrast: 70
+      - Brightness: 30
+      - Local Contrast: 50
+      - Max Gain: 21
+      - Zip Stream: low
+      - Dyn. FPS: off
+      - Dyn. Gop: on
+
+If a camera is unreachable (browser times out):
+  - Check ethernet cable from camera to Netgear switch
+  - Check green light on camera's ethernet port
+  - Power cycle the camera (unplug, wait 10s, replug)
+  - Try pinging from your laptop: ping 192.168.50.201
+
+
+========================================
+STEP 5: SSH INTO THE PI
+========================================
+
+Open a terminal (PowerShell or CMD) on your laptop:
+
+  ssh admin@192.168.50.127
+
+If SSH key isn't set up, enter password when prompted.
+
+Once connected, run these checks:
+
+  A) Check SSD is mounted:
+     df -h /mnt/video_ssd
+     → Should show ~932 GB total on /dev/sda2 (not /dev/mmcblk0)
+
+  B) Check SSD has correct folders:
+     ls /mnt/video_ssd/
+     → Should show: cam1  cam2  heartbeat_history  pi_state  pi_logs
+
+  C) Check bind mounts:
+     mount | grep fieldcam
+     → Should show two lines for state and logs
+
+  D) Check GPS is running:
+     sudo systemctl status gpsd
+     → Should show: active (running)
+
+  E) Check chrony time sources:
+     chronyc sources
+     → Should show NTP servers with * next to the active one
+     → GPS row (#?) is OK if no satellite fix yet
+
+  F) Check pull timer:
+     systemctl list-timers pull-axis-recordings.timer
+     → Should show next run at 08:15:00
+
+  G) Check last heartbeat ran OK:
+     tail -5 /home/admin/fieldcam/logs/heartbeat_status.log
+     → Should show "Email status: ok (sent)" recently
+
+
+========================================
+STEP 6: TEST HEARTBEAT MANUALLY
+========================================
+
+From the Pi SSH session:
+
+  sudo systemctl start pull-axis-recordings.service
+
+Wait 2-3 minutes (longer if recordings need to be pulled), then:
+
+  tail -10 /home/admin/fieldcam/logs/heartbeat_status.log
+
+Look for:
+  [ ] "Snapshot fetched for cam1"
+  [ ] "Snapshot fetched for cam2"
+  [ ] "Heartbeat written to ..."
+  [ ] "Email status: ok (sent)"
+
+Check your email inbox — you should receive a heartbeat email with two
+camera snapshots attached within a few minutes.
+
+If email fails:
+  - Confirm LTE is connected (Step 3)
+  - Check SMTP error in log: grep -i "email" /home/admin/fieldcam/logs/heartbeat_status.log
+  - Wait a few minutes and try again — may be a transient DNS issue
+
+
+========================================
+STEP 7: VERIFY GPS TIME SYNC (OPTIONAL)
+========================================
+
+GPS requires clear sky view. May not get a fix indoors.
+
+Check satellite status:
+  timeout 5 gpspipe -w | grep -i "mode\|nSat"
+
+Look for mode:3 = 3D fix, nSat > 4 = enough satellites.
+
+Check if chrony is using GPS:
+  chronyc sources
+  → GPS row showing * (current best) means GPS is syncing time
+
+If no GPS fix:
+  - The unit will fall back to NTP over cellular automatically
+  - GPS fix happens automatically once it has clear sky view
+  - Cold start can take 5-15 minutes outdoors
+
+
+========================================
+STEP 8: VERIFY SSD RECORDINGS
+========================================
+
+Check existing recordings on the SSD:
+
+  ls -lh /mnt/video_ssd/cam1/
+  ls -lh /mnt/video_ssd/cam2/
+
+Check available space:
+  df -h /mnt/video_ssd
+
+
+========================================
+STEP 9: REMOTE ACCESS CHECK (IF LTE AVAILABLE)
+========================================
+
+If you have internet on your phone or laptop:
+
+  A) Log into rms.teltonika-networks.com
+     - EWBrown device should show Online (green dot)
+     - If offline: wait 2-5 minutes after LTE connects
+
+  B) Test remote SSH via RMS:
+     - Click EWBrown → RMS Connect → Remote Access
+     - Connect to 192.168.50.127 port 22 (SSH)
+
+  C) Check public IP shows in heartbeat:
+     grep PUBLIC_IP /home/admin/fieldcam/config/heartbeat.env
+     → Should show INCLUDE_PUBLIC_IP=1
+
+
+========================================
+TROUBLESHOOTING QUICK REFERENCE
+========================================
+
+Problem: Pi not reachable at 192.168.50.127
+  → Check Pi ethernet lights (green + orange on port)
+  → Check Netgear switch port light
+  → Check /etc/hosts or try: ping 192.168.50.127
+
+Problem: SSD not mounted
+  → sudo mount -a
+  → If still fails: lsblk (check if SSD visible)
+  → Check SSD USB cable connection
+
+Problem: Cameras not reachable
+  → ping 192.168.50.201
+  → Check camera power and ethernet
+
+Problem: Email not sending
+  → Check LTE connected (Step 3)
+  → sudo systemctl restart pull-axis-recordings.service
+
+Problem: Pull script skipping (exit code 99)
+  → SSD not mounted — run: sudo mount -a
+
+Problem: Pi won't boot
+  → Check green activity LED — should blink during boot then settle
+  → Check power supply is fully plugged in
+  → Swap in backup Pi (same static IP, same config)
+
+
+========================================
+BACKUP PI SWAP PROCEDURE
+========================================
+
+If Pi1 needs to be replaced with the backup Pi:
+
+  1. Power off Pi1 (unplug power)
+  2. Disconnect ethernet from Pi1
+  3. Connect ethernet to backup Pi (Pi2)
+  4. Power on backup Pi
+  5. Wait 60 seconds to boot
+  6. SSH to same address: ssh admin@192.168.50.127
+     (backup Pi has same static IP configured)
+  7. Run manual heartbeat test (Step 6)
+
+
+========================================
+DAILY AUTOMATED SCHEDULE
+========================================
+
+  08:15 local time — Pull script runs automatically:
+    1. Checks SSD is mounted
+    2. Pulls completed recordings from camera SD cards to SSD
+    3. Generates heartbeat status report
+    4. Sends daily email with camera snapshots to:
+       aaron@thrutrackeranalytics.com
+
+  Heartbeat email includes:
+    - Camera status (reachable, recording counts, yesterday's duration)
+    - SD card and SSD storage levels
+    - Pi temperature and uptime
+    - Pull service result
+    - Public IP address

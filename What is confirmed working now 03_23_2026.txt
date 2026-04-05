@@ -39,8 +39,6 @@ Behavior verified:
 - Exports only completed recordings
 - Duplicate suppression via JSON state file works correctly
 - At least one exported .mkv verified readable with ffprobe
-- cam1 has a lingering event ID typo on the camera ("record_at_ngith") — fix in
-  camera event rule settings. Does not affect pull (cam1 event_id=None in script).
 
 
 SCHEDULING (confirmed working)
@@ -121,15 +119,6 @@ KNOWN GOTCHAS
 - SSD days-remaining estimate requires >1 day of file history; shows on day 2+
 - SD days-remaining estimate is based on used bytes / total completed recording
   duration — stabilizes after more recordings accumulate
-
-
-FUTURE WORK (not yet implemented)
------------------------------------
-- SD card alert threshold (currently only SSD has a usage alert)
-- ffprobe integrity check on newest exported file per camera
-- Pi memory/load in heartbeat report
-- Cellular signal strength via RUT241 REST API (once SIM installed)
-- Weekly summary email (rolling 7-day view)
 
 
 GITHUB
