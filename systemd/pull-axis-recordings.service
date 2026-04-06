@@ -1,6 +1,6 @@
 [Unit]
 Description=Pull completed Axis recordings to SSD and generate heartbeat
-Wants=network-online.target
+Wants=network-online.target home-admin-fieldcam-state.mount home-admin-fieldcam-logs.mount
 After=network-online.target home-admin-fieldcam-state.mount home-admin-fieldcam-logs.mount
 
 [Service]
