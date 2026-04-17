@@ -54,6 +54,8 @@ systemd timer (daily 08:15)
 
 The wrapper checks that the SSD is mounted before running the pull script. If the SSD is missing, the pull is skipped (exit code 99) and the heartbeat still runs so the alert email goes out. The pull exit code is passed to the heartbeat, then returned so pull failures still register in systemd.
 
+The pull script skips recordings older than `MAX_RECORDING_AGE_DAYS` (default 21 days). This prevents a fresh SSD from filling up with old footage that was already saved on the previous drive. With a 3-week swap cycle, each SSD holds ~3 weeks of backlog plus ~3 weeks of new recordings.
+
 ### Main Script: `scripts/heartbeat_status.py`
 
 All config from environment variables loaded via `EnvironmentFile` in the systemd unit. The script:
@@ -106,7 +108,8 @@ State and logs are bind-mounted from the SSD (`/mnt/video_ssd/pi_state` and `/mn
 - **Email retry**: 3 attempts at 30s intervals + 1 deferred retry after 30 minutes
 - **Hardware watchdog**: systemd pets BCM2835 watchdog every 7.5s; Pi auto-reboots if OS hangs for 15s
 - **Heartbeat history**: Timestamped copies saved to `SSD/heartbeat_history/` for offline audit
-- **Service timeout**: systemd kills the service after 90 minutes if it hangs
+- **Recording age filter**: Pull script skips recordings older than 21 days (`MAX_RECORDING_AGE_DAYS`), preventing SSD overflow on drive swaps
+- **Service timeout**: systemd kills the service after 6 hours if it hangs
 - **Bind mounts**: State/logs stored on SSD via systemd mount units, surviving SD card issues
 
 ### Cellular Connectivity

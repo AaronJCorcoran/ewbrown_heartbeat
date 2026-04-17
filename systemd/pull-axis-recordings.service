@@ -10,7 +10,7 @@ Group=admin
 WorkingDirectory=/home/admin/fieldcam
 EnvironmentFile=/home/admin/fieldcam/config/heartbeat.env
 ExecStart=/home/admin/fieldcam/scripts/run_pull_then_heartbeat.sh
-TimeoutStartSec=5400
+TimeoutStartSec=21600
 TimeoutStopSec=30
 
 [Install]

@@ -6,7 +6,7 @@ import pathlib
 import subprocess
 import sys
 import xml.etree.ElementTree as ET
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 # =========================
 # CONFIG
@@ -36,6 +36,11 @@ LOG_FILE = "/home/admin/fieldcam/logs/pull_axis_recordings.log"
 
 LIST_TIMEOUT = 120
 EXPORT_TIMEOUT = 6 * 60 * 60  # 6 hours
+
+# Skip recordings older than this many days.  Keeps SSD usage bounded when a
+# fresh drive is inserted and the SD cards still hold weeks of old footage.
+# Set to 0 to disable (pull everything).
+MAX_RECORDING_AGE_DAYS = 21
 
 
 # =========================
@@ -145,6 +150,21 @@ def build_filename(cam_name: str, recording: dict) -> str:
     return f"{cam_name}_{start_str}_{recording_id}.mkv"
 
 
+def _recording_too_old(recording: dict) -> bool:
+    """Return True if the recording started more than MAX_RECORDING_AGE_DAYS ago."""
+    if MAX_RECORDING_AGE_DAYS <= 0:
+        return False
+    starttime = recording.get("starttime")
+    if not starttime:
+        return False
+    try:
+        start_dt = datetime.fromisoformat(starttime.replace("Z", "+00:00"))
+        cutoff = datetime.now(timezone.utc) - timedelta(days=MAX_RECORDING_AGE_DAYS)
+        return start_dt < cutoff
+    except Exception:
+        return False
+
+
 def should_export(cam: dict, recording: dict, state: dict) -> bool:
     recording_id = recording.get("recordingid")
     if not recording_id:
@@ -160,6 +180,9 @@ def should_export(cam: dict, recording: dict, state: dict) -> bool:
         return False
 
     if recording_id in state.get(cam["name"], {}):
+        return False
+
+    if _recording_too_old(recording):
         return False
 
     return True
@@ -227,6 +250,8 @@ def process_camera(cam: dict, state: dict) -> None:
         )
 
         if not should_export(cam, rec, state):
+            if _recording_too_old(rec) and rec_id not in cam_state:
+                log(f"{cam_name}: skipping {rec_id} (older than {MAX_RECORDING_AGE_DAYS} days)")
             continue
 
         filename = build_filename(cam_name, rec)
